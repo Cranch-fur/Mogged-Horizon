@@ -20,13 +20,14 @@ thread_local! {
 /// Ticks between two tries to give the server our presets.
 const RETRY_TICKS: u32 = 40;
 
-/// Ticks between two looks at the settings file and the presets' skins (a second).
-const WATCH_TICKS: u32 = 20;
+/// Time between two looks at the settings file and the presets' skins.
+const WATCH_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// What was last read, to see what changed since.
 #[derive(Default)]
 struct Watch {
-    ticks: u32,
+    /// When it last looked.
+    last: Option<Instant>,
     /// The settings file's text (None: there was none to read).
     config: Option<String>,
     /// Each preset's skin: where it came from and, for a file, its bytes' hash.
@@ -128,7 +129,7 @@ pub(crate) fn load() {
         let mut w = w.borrow_mut();
         w.config = Some(text);
         w.presets = Default::default();
-        w.ticks = 0;
+        w.last = Some(Instant::now());
     });
     for i in 0..m::PRESETS {
         load_preset(&dir, &config, i, None);
@@ -182,18 +183,6 @@ fn load_preset(dir: &std::path::Path, config: &m::Config, i: usize, seen: Option
 /// About once a second: the settings file read again when it changed (all
 /// of it), else each preset's skin when it appeared, went or changed.
 fn watch() {
-    let due = WATCH.with(|w| {
-        let mut w = w.borrow_mut();
-        w.ticks += 1;
-        if w.ticks < WATCH_TICKS {
-            return false;
-        }
-        w.ticks = 0;
-        true
-    });
-    if !due {
-        return;
-    }
     let Some(dir) = config_dir() else {
         return;
     };
@@ -259,8 +248,6 @@ pub(crate) fn tick(game: &mut Game<'_>) {
     if !m::with_client(|c| c.loaded) {
         load();
     }
-    watch();
-    poll_downloads();
     if game.native_player().is_none() {
         m::with_client(|c| {
             if c.synced || !c.others.is_empty() || c.me.anim.is_some() {
@@ -351,6 +338,30 @@ pub(crate) fn frame(game: &mut Game<'_>) {
         return;
     }
     let now = Instant::now();
+    // The skins are watched here, not in the tick: frames go on in menus, on
+    // the title screen and while the game is paused (Options, where the
+    // settings page is), ticks don't.
+    if !m::with_client(|c| c.loaded) {
+        load();
+    }
+    let due = WATCH.with(|w| {
+        let mut w = w.borrow_mut();
+        let due = w.last.is_none_or(|last| now.duration_since(last) >= WATCH_EVERY);
+        if due {
+            w.last = Some(now);
+        }
+        due
+    });
+    if due || DOWNLOADS.with(|d| !d.borrow().is_empty()) {
+        let before = m::with_client(|c| c.page());
+        if due {
+            watch();
+        }
+        poll_downloads();
+        if m::with_client(|c| c.page()) != before {
+            refresh_page(game);
+        }
+    }
     for (player, location) in m::with_client(|c| c.defaults_wanted()) {
         let pixels = game.skin_downloads.borrow().mogged_pixels(&location);
         m::with_client(|c| c.set_default_pixels(player, pixels));
@@ -449,6 +460,15 @@ pub(crate) fn listed(mods: &mut Vec<crate::game::native_hooks::NativeMod>) {
 thread_local! {
     /// The settings page's buttons as last shown, for its clicks.
     static PAGE: RefCell<Vec<m::Button>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The settings page shows what changed (a preset that got or lost its skin),
+/// even while it is open.
+fn refresh_page(game: &mut Game<'_>) {
+    let i = game.settings.mods.installed.iter().position(|row| row.id == m::ID);
+    if let Some(i) = i {
+        game.native_settings_refresh(i);
+    }
 }
 
 /// Mogged's settings page.
