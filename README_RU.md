@@ -53,11 +53,11 @@
 
 Почти всё сделано на стабильных точках хуков Horizon (`native_hooks.rs`): тик, кадр, клавиша, сообщения модов,
 вход и выход игроков, страница в Options → Mods. Но готового хука для подмены скина игрока нет, поэтому мод
-встраивается (`RETURN`) во внутренние функции `Game::update_remote_skins` и `Game::face_skin` в `game/remote.rs`
-и добавляет модуль в
+встраивается во внутренние функции `Game::entity_geometry` и `Game::draw_inventory` (`HEAD`) в `game.rs` и
+`Game::face_skin` (`RETURN`) в `game/remote.rs`, добавляет модуль в `game/remote.rs` и модуль в
 `horizon-client-render/src/skins.rs`, чтобы получить пиксели скина аккаунта для анимации. Такие места не входят в
 стабильный API, поэтому `compatibility.json` указывает точный коммит, а не версию хуков. Для следующих Nightly нужно
-проверить, что `update_remote_skins`, `face_skin`, `store_skin` и `skins::Downloader` не изменились, и обновить коммит.
+проверить, что `update_remote_skins`, `entity_geometry`, `draw_inventory`, `face_skin`, `store_skin` и `skins::Downloader` не изменились, и обновить коммит.
 
 ## Сборка и проверка
 

@@ -4,8 +4,8 @@ version = "1.1.0"
 priority = 100
 
 # The Nightly it is made for. Besides Horizon's native hook points it changes
-# the skins Horizon gives players (`update_remote_skins`, `face_skin`), which
-# aren't hook points, so it is pinned to this commit.
+# the skins Horizon draws players with (the model builders, `face_skin`),
+# which aren't hook points, so it is pinned to this commit.
 [compatibility]
 horizon_revision = "c9d474dd9116e84c243f8992d75c11314df56f06"
 
@@ -31,16 +31,33 @@ name = "mogged_access"
 source = "pixels.rs"
 visibility = "pub"
 
-# The level's player models and the own model: after Horizon sets their skins.
-# (Not `drawn_skin` itself: horizon-mixins can't hook its tuple parameter.)
-# `value` comes first so the function's last statement runs before `game` is borrowed.
+# The skins on the models: game::remote::mogged_remote, inside game/remote.rs
+# to see the connection's players.
+[[module]]
+id = "remote"
+file = "crates/horizon-client/src/game/remote.rs"
+name = "mogged_remote"
+source = "remote_skins.rs"
+
+# Horizon resets every player model's skin each frame in the HUD
+# (`update_remote_skins`, which horizon-mixins can't hook: it has nested items),
+# and `drawn_skin` has a tuple parameter it can't bind. So the preset goes on
+# the models right before they are drawn: the world's, and the inventory's.
 [[injection]]
-id = "skins"
-kind = "RETURN"
-target = "horizon_client::game::remote::Game<'_>::update_remote_skins"
-helper = "skins.rs"
+id = "models"
+kind = "HEAD"
+target = "horizon_client::game::Game<'_>::entity_geometry"
+helper = "models.rs"
 bindings = [
-  { name = "value", ty = "()", value = "$value" },
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+[[injection]]
+id = "inventory"
+kind = "HEAD"
+target = "horizon_client::game::Game<'_>::draw_inventory"
+helper = "inventory.rs"
+bindings = [
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
 ]
 
