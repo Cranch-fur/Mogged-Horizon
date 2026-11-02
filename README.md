@@ -21,8 +21,12 @@ It shares the Fabric mod's version (1.1.0) but does less for now; see below.
   LAN) relays presets to the other players with the mod and catches up those who join later.
 - **The Fabric mod's config,** `config/mogged.json`: presets, `activePreset`, `cycle`, `durationMs` and `effects` are
   read and saved; keys this port doesn't use (capes, elytra) stay as they are.
-- **Settings page** (Options → Mods → Mogged → Settings): animation length, effects, each preset's model, Reload skins,
-  Open skins folder.
+- **Settings page** (Options → Mods → Mogged → Settings): which skin to wear (the account's, or a preset that has a
+  skin), each such preset's model, animation length, effects, where each preset's skin is read from, and Open skins
+  folder.
+- **Skins load by themselves:** about once a second the mod checks `mogged.json` and the presets' files (by their
+  contents' hash), and reads again whatever appeared, changed or went. A preset given as a URL is downloaded again when
+  the URL changes.
 
 ## Not yet
 
@@ -44,7 +48,7 @@ It shares the Fabric mod's version (1.1.0) but does less for now; see below.
 
    From the command line: `horizon-launcher native-build <folder with the unpacked .hnmod> --trust-native-code`.
 4. Start the game. The mod writes `config/mogged.json` and makes `config/mogged/`; put `preset1.png` and `preset2.png`
-   there (or paths in `mogged.json`) and press **Reload skins** on the mod's settings page.
+   there (or paths in `mogged.json`); they load within a second.
 
 Horizon's native mods aren't sandboxed: they are Rust compiled into the game and run with your rights.
 

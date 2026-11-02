@@ -381,7 +381,21 @@ pub struct Config {
     pub effects: bool,
 }
 
-/// What a click on the settings page asks the game to do besides saving.
+/// A button of the settings page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Button {
+    /// Wear this skin now: 0 the account's, 1 and 2 the presets.
+    Wear(u8),
+    Duration,
+    Effects,
+    /// Preset n's model, slim or classic.
+    Model(u8),
+    /// Where preset n's skin is read from; opens the skins folder.
+    Place(u8),
+    OpenFolder,
+}
+
+/// What a click on the settings page asks the game to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Click {
     Nothing,
@@ -389,9 +403,9 @@ pub enum Click {
     Save,
     /// A preset's model changed: save and send it again.
     SaveAndResend,
-    /// Read the file and the skins again.
-    Reload,
-    /// Open the folder with the file in the system's file manager.
+    /// Wear this skin (with the sweep), then save.
+    Wear(u8),
+    /// Open the skins folder in the system's file manager.
     OpenFolder,
 }
 
@@ -475,42 +489,51 @@ impl Config {
         json::write(&root) + "\n"
     }
 
-    /// The settings page's buttons.
-    pub fn labels(&self) -> Vec<String> {
-        let on = |b: bool| if b { "ON" } else { "OFF" };
-        let model = |p: &Preset| if p.slim { "Slim" } else { "Classic" };
-        vec![
-            format!("Animation: {:.1} s", self.duration_ms as f32 / 1000.0),
-            format!("Effects: {}", on(self.effects)),
-            format!("Preset 1 model: {}", model(&self.presets[0])),
-            format!("Preset 2 model: {}", model(&self.presets[1])),
-            "Reload skins".to_owned(),
-            "Open skins folder".to_owned(),
-        ]
-    }
-
-    /// A click on button `i` of `labels`.
-    pub fn click(&mut self, i: usize) -> Click {
-        match i {
-            0 => {
+    /// A click on `button` of the settings page.
+    pub fn click(&mut self, button: Button) -> Click {
+        match button {
+            Button::Wear(p) => Click::Wear(p),
+            Button::Duration => {
                 let next = DURATIONS.iter().position(|&d| d > self.duration_ms).unwrap_or(0);
                 self.duration_ms = DURATIONS[next];
                 Click::Save
             }
-            1 => {
+            Button::Effects => {
                 self.effects = !self.effects;
                 Click::Save
             }
-            2 | 3 => {
-                let p = &mut self.presets[i - 2];
-                p.slim = !p.slim;
-                Click::SaveAndResend
-            }
-            4 => Click::Reload,
-            5 => Click::OpenFolder,
-            _ => Click::Nothing,
+            Button::Model(n) => match self.presets.get_mut(usize::from(n).wrapping_sub(1)) {
+                Some(p) => {
+                    p.slim = !p.slim;
+                    Click::SaveAndResend
+                }
+                None => Click::Nothing,
+            },
+            Button::Place(_) | Button::OpenFolder => Click::OpenFolder,
         }
     }
+
+    /// Where preset `n`'s skin is read from, as the settings page shows it:
+    /// the default file under `config/`, or the path or URL as typed
+    /// (shortened from the front when long).
+    pub fn place(&self, n: u8) -> String {
+        let raw = self
+            .presets
+            .get(usize::from(n).wrapping_sub(1))
+            .map_or("", |p| p.skin.trim().trim_matches('"').trim());
+        if raw.is_empty() {
+            return format!("config/{ID}/preset{n}.png");
+        }
+        const MAX: usize = 48;
+        let chars: Vec<char> = raw.chars().collect();
+        if chars.len() <= MAX {
+            raw.to_owned()
+        } else {
+            let tail: String = chars[chars.len() - (MAX - 3)..].iter().collect();
+            format!("...{tail}")
+        }
+    }
+
 }
 
 // ---------------------------------------------------------------------------
@@ -884,7 +907,7 @@ pub fn blend_location(player: u128) -> String {
 
 #[derive(Debug, Default)]
 pub struct Client {
-    /// The settings and presets are read (once, then on Reload).
+    /// The settings and presets are read (then watched for changes).
     pub loaded: bool,
     pub config: Config,
     /// This window's player, as the skin code names it.
@@ -956,6 +979,33 @@ impl Client {
         let active = self.config.active;
         self.me.active = if self.me.has_content(active) { active } else { 0 };
         self.me.anim = None;
+    }
+
+    /// The settings page: each button and its label. A preset is offered
+    /// (to wear, and its model) only while it has a skin.
+    pub fn page(&self) -> Vec<(Button, String)> {
+        let on = |b: bool| if b { "ON" } else { "OFF" };
+        let mark = |p: u8| if self.me.active == p { "[x]" } else { "[ ]" };
+        let mut out = vec![(Button::Wear(0), format!("{} Account skin", mark(0)))];
+        for n in 1..=PRESETS as u8 {
+            if self.me.has_content(n) {
+                out.push((Button::Wear(n), format!("{} Preset {n}", mark(n))));
+            }
+        }
+        for n in 1..=PRESETS as u8 {
+            if self.me.has_content(n) {
+                let slim = self.config.presets[usize::from(n) - 1].slim;
+                out.push((Button::Model(n), format!("Preset {n} model: {}", if slim { "Slim" } else { "Classic" })));
+            }
+        }
+        out.push((Button::Duration, format!("Animation: {:.1} s", self.config.duration_ms as f32 / 1000.0)));
+        out.push((Button::Effects, format!("Effects: {}", on(self.config.effects))));
+        for n in 1..=PRESETS as u8 {
+            let state = if self.me.has_content(n) { "" } else { " (none)" };
+            out.push((Button::Place(n), format!("Preset {n}: {}{state}", self.config.place(n))));
+        }
+        out.push((Button::OpenFolder, "Open skins folder".to_owned()));
+        out
     }
 
     /// The switch key: the next preset that is in the cycle and has a skin.
@@ -1376,18 +1426,39 @@ mod tests {
     #[test]
     fn settings_buttons_cycle() {
         let mut config = Config::default();
-        assert_eq!(config.labels()[0], "Animation: 1.2 s");
-        assert_eq!(config.click(0), Click::Save);
+        assert_eq!(config.click(Button::Duration), Click::Save);
         assert_eq!(config.duration_ms, 1600);
         for _ in 0..3 {
-            config.click(0);
+            config.click(Button::Duration);
         }
         assert_eq!(config.duration_ms, 200);
-        assert_eq!(config.click(2), Click::SaveAndResend);
+        assert_eq!(config.click(Button::Model(1)), Click::SaveAndResend);
         assert!(config.presets[0].slim);
-        assert_eq!(config.labels()[2], "Preset 1 model: Slim");
-        assert_eq!(config.click(5), Click::OpenFolder);
-        assert_eq!(config.click(9), Click::Nothing);
+        assert_eq!(config.click(Button::Model(3)), Click::Nothing);
+        assert_eq!(config.click(Button::Place(2)), Click::OpenFolder);
+        assert_eq!(config.click(Button::Wear(2)), Click::Wear(2));
+        assert_eq!(config.place(1), "config/mogged/preset1.png");
+        config.presets[1].skin = format!("\"C:/skins/{}.png\"", "x".repeat(60));
+        assert!(config.place(2).starts_with("...") && config.place(2).ends_with("x.png"));
+        assert_eq!(config.place(2).chars().count(), 48);
+    }
+
+    #[test]
+    fn settings_page_offers_presets_with_a_skin() {
+        let mut client = Client::default();
+        let labels = |c: &Client| c.page().into_iter().map(|(_, l)| l).collect::<Vec<_>>();
+        let page = labels(&client);
+        assert_eq!(page[0], "[x] Account skin");
+        assert!(!page.iter().any(|l| l.contains("[ ] Preset") || l.contains("model")));
+        assert!(page.contains(&"Preset 1: config/mogged/preset1.png (none)".to_owned()));
+        client.set_own_preset(2, Some((true, vec![0; SKIN_BYTES])));
+        client.me.active = 2;
+        let page = labels(&client);
+        assert_eq!(page[0], "[ ] Account skin");
+        assert_eq!(page[1], "[x] Preset 2");
+        assert!(page.contains(&"Preset 2 model: Classic".to_owned()));
+        assert!(page.contains(&"Preset 2: config/mogged/preset2.png".to_owned()));
+        assert!(!page.iter().any(|l| l.ends_with("Preset 1")));
     }
 
     #[test]

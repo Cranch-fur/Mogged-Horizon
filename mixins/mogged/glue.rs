@@ -4,6 +4,7 @@
 use crate::game::{Game, mogged as m};
 use std::{
     cell::RefCell,
+    hash::{Hash, Hasher},
     path::PathBuf,
     sync::mpsc::{Receiver, TryRecvError, channel},
     time::Instant,
@@ -18,6 +19,38 @@ thread_local! {
 
 /// Ticks between two tries to give the server our presets.
 const RETRY_TICKS: u32 = 40;
+
+/// Ticks between two looks at the settings file and the presets' skins (a second).
+const WATCH_TICKS: u32 = 20;
+
+/// What was last read, to see what changed since.
+#[derive(Default)]
+struct Watch {
+    ticks: u32,
+    /// The settings file's text (None: there was none to read).
+    config: Option<String>,
+    /// Each preset's skin: where it came from and, for a file, its bytes' hash.
+    presets: [Option<Seen>; m::PRESETS],
+}
+
+#[derive(Clone, PartialEq, Eq)]
+enum Seen {
+    /// A file that is there, by its bytes' hash; a path that can't be read
+    /// has no hash.
+    File(PathBuf, Option<u64>),
+    /// A URL is downloaded once, and again only when it changes.
+    Url(String),
+}
+
+thread_local! {
+    static WATCH: RefCell<Watch> = RefCell::new(Watch::default());
+}
+
+fn hash(bytes: &[u8]) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
+}
 
 fn config_dir() -> Option<PathBuf> {
     Game::native_config_dir().ok()
@@ -67,18 +100,23 @@ pub(crate) fn load() {
     };
     let _ = std::fs::create_dir_all(dir.join(m::ID));
     let file = config_file(&dir);
-    let config = match std::fs::read_to_string(&file) {
-        Ok(text) => match m::Config::parse(&text) {
+    let read = std::fs::read_to_string(&file).ok();
+    let config = match &read {
+        Some(text) => match m::Config::parse(text) {
             Ok(config) => config,
             Err(e) => {
                 message(format!("Mogged: config/{}.json can't be read ({e}); using the defaults", m::ID));
                 m::Config::default()
             }
         },
-        Err(_) => {
-            let config = m::Config::default();
-            let _ = std::fs::write(&file, config.to_text());
-            config
+        None => m::Config::default(),
+    };
+    let text = match read {
+        Some(text) => text,
+        None => {
+            let text = config.to_text();
+            let _ = std::fs::write(&file, &text);
+            text
         }
     };
     m::with_client(|c| {
@@ -86,30 +124,97 @@ pub(crate) fn load() {
         c.loaded = true;
     });
     DOWNLOADS.with(|d| d.borrow_mut().clear());
-    for (i, preset) in config.presets.iter().enumerate() {
-        let n = i as u8 + 1;
-        match m::source(&dir, i, &preset.skin) {
-            m::Source::None => m::with_client(|c| c.set_own_preset(n, None)),
-            m::Source::File(path) => {
-                let result = std::fs::read(&path)
-                    .map_err(|e| format!("{}: {e}", path.display()))
-                    .and_then(|bytes| decode(&bytes));
-                apply(n, preset.slim, result);
+    WATCH.with(|w| {
+        let mut w = w.borrow_mut();
+        w.config = Some(text);
+        w.presets = Default::default();
+        w.ticks = 0;
+    });
+    for i in 0..m::PRESETS {
+        load_preset(&dir, &config, i, None);
+    }
+    m::with_client(|c| c.restore_active());
+}
+
+/// Preset `i`'s skin as `config` names it, unless it is the one already
+/// `seen`; a file's bytes are compared by their hash, so a changed image is
+/// read again and one that stays the same costs only the read.
+fn load_preset(dir: &std::path::Path, config: &m::Config, i: usize, seen: Option<&Seen>) {
+    let n = i as u8 + 1;
+    let preset = &config.presets[i];
+    let (now, bytes) = match m::source(dir, i, &preset.skin) {
+        m::Source::None => (None, None),
+        m::Source::File(path) => match std::fs::read(&path) {
+            Ok(bytes) => (Some(Seen::File(path, Some(hash(&bytes)))), Some(Ok(bytes))),
+            Err(e) => {
+                let error = format!("{}: {e}", path.display());
+                (Some(Seen::File(path, None)), Some(Err(error)))
             }
-            m::Source::Url(url) => {
-                m::with_client(|c| c.set_own_preset(n, None));
-                let (send, receive) = channel();
-                std::thread::spawn(move || {
-                    let result = horizon_client::skins::mogged_access::http_get(&url)
-                        .ok_or_else(|| format!("{url} could not be downloaded"))
-                        .and_then(|bytes| decode(&bytes));
-                    let _ = send.send(result);
-                });
-                DOWNLOADS.with(|d| d.borrow_mut().push((n, preset.slim, receive)));
+        },
+        m::Source::Url(url) => (Some(Seen::Url(url)), None),
+    };
+    if seen.is_some() && now.as_ref() == seen {
+        return;
+    }
+    if seen.is_some() {
+        // Whatever was waiting for the old one isn't wanted any more.
+        DOWNLOADS.with(|d| d.borrow_mut().retain(|(p, _, _)| *p != n));
+    }
+    WATCH.with(|w| w.borrow_mut().presets[i] = now.clone());
+    match (now, bytes) {
+        (None, _) => m::with_client(|c| c.set_own_preset(n, None)),
+        (Some(Seen::File(..)), Some(result)) => apply(n, preset.slim, result.and_then(|b| decode(&b))),
+        (Some(Seen::Url(url)), _) => {
+            m::with_client(|c| c.set_own_preset(n, None));
+            let (send, receive) = channel();
+            std::thread::spawn(move || {
+                let result = horizon_client::skins::mogged_access::http_get(&url)
+                    .ok_or_else(|| format!("{url} could not be downloaded"))
+                    .and_then(|bytes| decode(&bytes));
+                let _ = send.send(result);
+            });
+            DOWNLOADS.with(|d| d.borrow_mut().push((n, preset.slim, receive)));
+        }
+        (Some(Seen::File(..)), None) => {}
+    }
+}
+
+/// About once a second: the settings file read again when it changed (all
+/// of it), else each preset's skin when it appeared, went or changed.
+fn watch() {
+    let due = WATCH.with(|w| {
+        let mut w = w.borrow_mut();
+        w.ticks += 1;
+        if w.ticks < WATCH_TICKS {
+            return false;
+        }
+        w.ticks = 0;
+        true
+    });
+    if !due {
+        return;
+    }
+    let Some(dir) = config_dir() else {
+        return;
+    };
+    let text = std::fs::read_to_string(config_file(&dir)).ok();
+    if text.is_none() || WATCH.with(|w| w.borrow().config != text) {
+        load();
+        return;
+    }
+    let config = m::with_client(|c| c.config.clone());
+    for i in 0..m::PRESETS {
+        let seen = WATCH.with(|w| w.borrow().presets[i].clone());
+        match seen {
+            Some(seen) => load_preset(&dir, &config, i, Some(&seen)),
+            // Nothing was there: anything now is new.
+            None => {
+                if !matches!(m::source(&dir, i, &config.presets[i].skin), m::Source::None) {
+                    load_preset(&dir, &config, i, None);
+                }
             }
         }
     }
-    m::with_client(|c| c.restore_active());
 }
 
 /// Presets that finished downloading.
@@ -135,6 +240,8 @@ fn save(text: String) {
     let Some(dir) = config_dir() else {
         return;
     };
+    // Our own write isn't a change to read back.
+    WATCH.with(|w| w.borrow_mut().config = Some(text.clone()));
     if let Err(e) = std::fs::write(config_file(&dir), text) {
         message(format!("Mogged: config/{}.json can't be saved: {e}", m::ID));
     }
@@ -152,6 +259,7 @@ pub(crate) fn tick(game: &mut Game<'_>) {
     if !m::with_client(|c| c.loaded) {
         load();
     }
+    watch();
     poll_downloads();
     if game.native_player().is_none() {
         m::with_client(|c| {
@@ -229,7 +337,7 @@ pub(crate) fn key(game: &mut Game<'_>, key: &str, pressed: bool) {
     match switched {
         Ok(text) => save(text),
         Err(true) => game.native_chat(&format!(
-            "Mogged: no presets yet. Put preset1.png and preset2.png in config/{}/, or set them in config/{}.json, then press Reload skins in Options > Mods > Mogged.",
+            "Mogged: no presets yet. Put preset1.png and preset2.png in config/{}/ (Options > Mods > Mogged > Open skins folder), or set them in config/{}.json; they load by themselves.",
             m::ID,
             m::ID
         )),
@@ -338,6 +446,11 @@ pub(crate) fn listed(mods: &mut Vec<crate::game::native_hooks::NativeMod>) {
     });
 }
 
+thread_local! {
+    /// The settings page's buttons as last shown, for its clicks.
+    static PAGE: RefCell<Vec<m::Button>> = const { RefCell::new(Vec::new()) };
+}
+
 /// Mogged's settings page.
 pub(crate) fn settings(mod_id: &str, buttons: &mut Vec<String>) {
     if mod_id != m::ID {
@@ -346,7 +459,9 @@ pub(crate) fn settings(mod_id: &str, buttons: &mut Vec<String>) {
     if !m::with_client(|c| c.loaded) {
         load();
     }
-    buttons.extend(m::with_client(|c| c.config.labels()));
+    let page = m::with_client(|c| c.page());
+    PAGE.with(|p| *p.borrow_mut() = page.iter().map(|(b, _)| *b).collect());
+    buttons.extend(page.into_iter().map(|(_, label)| label));
 }
 
 /// A click on Mogged's settings page.
@@ -354,22 +469,33 @@ pub(crate) fn click(mod_id: &str, button: usize) {
     if mod_id != m::ID {
         return;
     }
+    let Some(button) = PAGE.with(|p| p.borrow().get(button).copied()) else {
+        return;
+    };
     let (result, text) = m::with_client(|c| {
         let result = c.config.click(button);
-        if result == m::Click::SaveAndResend {
-            let preset = button as u8 - 1;
-            let slim = c.config.presets[preset as usize - 1].slim;
-            c.set_own_slim(preset, slim);
+        match result {
+            m::Click::SaveAndResend => {
+                if let m::Button::Model(n) = button {
+                    let slim = c.config.presets[usize::from(n) - 1].slim;
+                    c.set_own_slim(n, slim);
+                }
+            }
+            m::Click::Wear(n) => {
+                if c.me.active != n && c.me.has_content(n) {
+                    c.select(n, Instant::now());
+                }
+            }
+            _ => {}
         }
         (result, c.config.to_text())
     });
     match result {
-        m::Click::Save | m::Click::SaveAndResend => {
+        m::Click::Save | m::Click::SaveAndResend | m::Click::Wear(_) => {
             save(text);
             // The animation and effects travel with the state.
             m::with_client(|c| c.state_dirty = true);
         }
-        m::Click::Reload => load(),
         m::Click::OpenFolder => {
             if let Some(dir) = config_dir() {
                 let folder = dir.join(m::ID);
