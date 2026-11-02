@@ -1,0 +1,13 @@
+[package]
+name = "horizon-mod-mogged"
+version = "1.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+description = "Mogged for Horizon, a native mod: switch between your skin and two presets with one key."
+
+# The mod's logic and its tests: the same file the bundle adds to the game.
+[lib]
+path = "mixins/mogged/runtime.rs"
+
+[dependencies]

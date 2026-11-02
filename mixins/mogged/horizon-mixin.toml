@@ -1,0 +1,141 @@
+[mod]
+id = "mogged"
+version = "1.1.0"
+priority = 100
+
+# The Nightly it is made for. Besides Horizon's native hook points it changes
+# the skin Horizon draws for a player (`drawn_skin`), which isn't one, so it
+# is pinned to this commit.
+[compatibility]
+horizon_revision = "c9d474dd9116e84c243f8992d75c11314df56f06"
+
+# The mod's logic and state (no game types): game::mogged.
+[[module]]
+id = "runtime"
+file = "crates/horizon-client/src/game.rs"
+name = "mogged"
+source = "runtime.rs"
+
+# The edges between the game and the logic: game::mogged_glue.
+[[module]]
+id = "glue"
+file = "crates/horizon-client/src/game.rs"
+name = "mogged_glue"
+source = "glue.rs"
+
+# A player's own skin as pixels, for the sweep: horizon_client::skins::mogged_access.
+[[module]]
+id = "pixels"
+file = "crates/horizon-client-render/src/skins.rs"
+name = "mogged_access"
+source = "pixels.rs"
+visibility = "pub"
+
+[[injection]]
+id = "skin"
+kind = "RETURN"
+target = "horizon_client::game::remote::Game<'_>::drawn_skin"
+helper = "skin.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "uuid", ty = "u128", value = "uuid" },
+  { name = "value", ty = "(String, bool)", value = "$value" },
+]
+
+[[injection]]
+id = "tick"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_tick"
+helper = "tick.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+[[injection]]
+id = "frame"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_frame"
+helper = "frame.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+[[injection]]
+id = "key"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_key"
+helper = "key.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "key", ty = "&str", value = "key" },
+  { name = "pressed", ty = "bool", value = "pressed" },
+]
+
+[[injection]]
+id = "from_server"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_net_from_server"
+helper = "from_server.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "channel", ty = "&str", value = "channel" },
+  { name = "data", ty = "&[u8]", value = "data" },
+]
+
+[[injection]]
+id = "from_client"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_net_from_client"
+helper = "from_client.rs"
+bindings = [
+  { name = "player", ty = "u128", value = "player" },
+  { name = "channel", ty = "&str", value = "channel" },
+  { name = "data", ty = "&[u8]", value = "data" },
+]
+
+[[injection]]
+id = "logged_in"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_player_logged_in"
+helper = "logged_in.rs"
+bindings = [
+  { name = "player", ty = "u128", value = "player" },
+]
+
+[[injection]]
+id = "logged_out"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_player_logged_out"
+helper = "logged_out.rs"
+bindings = [
+  { name = "player", ty = "u128", value = "player" },
+]
+
+[[injection]]
+id = "list"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_mods"
+helper = "list.rs"
+bindings = [
+  { name = "mods", ty = "&mut Vec<crate::game::native_hooks::NativeMod>", value = "&mut *mods" },
+]
+
+[[injection]]
+id = "settings"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_settings"
+helper = "settings.rs"
+bindings = [
+  { name = "mod_id", ty = "&str", value = "mod_id" },
+  { name = "buttons", ty = "&mut Vec<String>", value = "&mut *buttons" },
+]
+
+[[injection]]
+id = "click"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_settings_click"
+helper = "click.rs"
+bindings = [
+  { name = "mod_id", ty = "&str", value = "mod_id" },
+  { name = "button", ty = "usize", value = "button" },
+]
