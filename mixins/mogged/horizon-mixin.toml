@@ -4,8 +4,8 @@ version = "1.1.0"
 priority = 100
 
 # The Nightly it is made for. Besides Horizon's native hook points it changes
-# the skin Horizon draws for a player (`drawn_skin`), which isn't one, so it
-# is pinned to this commit.
+# the skins Horizon gives players (`update_remote_skins`, `face_skin`), which
+# aren't hook points, so it is pinned to this commit.
 [compatibility]
 horizon_revision = "c9d474dd9116e84c243f8992d75c11314df56f06"
 
@@ -31,15 +31,29 @@ name = "mogged_access"
 source = "pixels.rs"
 visibility = "pub"
 
+# The level's player models and the own model: after Horizon sets their skins.
+# (Not `drawn_skin` itself: horizon-mixins can't hook its tuple parameter.)
+# `value` comes first so the function's last statement runs before `game` is borrowed.
 [[injection]]
-id = "skin"
+id = "skins"
 kind = "RETURN"
-target = "horizon_client::game::remote::Game<'_>::drawn_skin"
-helper = "skin.rs"
+target = "horizon_client::game::remote::Game<'_>::update_remote_skins"
+helper = "skins.rs"
 bindings = [
+  { name = "value", ty = "()", value = "$value" },
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+]
+
+# Faces in the player list and spectator menu.
+[[injection]]
+id = "face"
+kind = "RETURN"
+target = "horizon_client::game::remote::Game<'_>::face_skin"
+helper = "face.rs"
+bindings = [
+  { name = "value", ty = "String", value = "$value" },
   { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
   { name = "uuid", ty = "u128", value = "uuid" },
-  { name = "value", ty = "(String, bool)", value = "$value" },
 ]
 
 [[injection]]

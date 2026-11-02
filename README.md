@@ -52,10 +52,11 @@ Horizon's native mods aren't sandboxed: they are Rust compiled into the game and
 
 Nearly everything uses Horizon's stable native hook points (`native_hooks.rs`): tick, frame, key, mod messages,
 players joining and leaving, the Options → Mods page. There is no hook point for the skin a player is drawn with,
-though, so the mod hooks (`RETURN`) the internal `Game::drawn_skin` in `game/remote.rs`, and adds a module to
+though, so the mod hooks (`RETURN`) the internal `Game::update_remote_skins` and `Game::face_skin` in
+`game/remote.rs`, and adds a module to
 `horizon-client-render/src/skins.rs` to read the account skin's pixels for the sweep. Those aren't part of the stable
 API, so `compatibility.json` names an exact commit rather than a hooks version. For a newer Nightly, check that
-`drawn_skin`, `store_skin` and `skins::Downloader` are unchanged and move the pin.
+`update_remote_skins`, `face_skin`, `store_skin` and `skins::Downloader` are unchanged and move the pin.
 
 ## Build and test
 
