@@ -390,7 +390,7 @@ pub enum Button {
     Effects,
     /// Preset n's model, slim or classic.
     Model(u8),
-    /// Where preset n's skin is read from; opens the skins folder.
+    /// Where preset n's skin is read from: a line of text on the page.
     Place(u8),
     OpenFolder,
 }

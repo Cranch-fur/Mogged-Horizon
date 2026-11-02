@@ -73,6 +73,19 @@ bindings = [
   { name = "uuid", ty = "u128", value = "uuid" },
 ]
 
+# The settings page: the skin paths as lines of text rather than buttons.
+# Native pages only have buttons, so the labels marked with U+0001 become notes.
+[[injection]]
+id = "notes"
+kind = "RETURN"
+target = "horizon_client_render::options_ui::OptionsUi::native_rows"
+helper = "notes.rs"
+bindings = [
+  { name = "value", ty = "Vec<Row>", value = "$value" },
+  { name = "s", ty = "&Settings", value = "s" },
+  { name = "i", ty = "usize", value = "i" },
+]
+
 [[injection]]
 id = "tick"
 kind = "HEAD"

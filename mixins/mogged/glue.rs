@@ -461,7 +461,11 @@ pub(crate) fn settings(mod_id: &str, buttons: &mut Vec<String>) {
     }
     let page = m::with_client(|c| c.page());
     PAGE.with(|p| *p.borrow_mut() = page.iter().map(|(b, _)| *b).collect());
-    buttons.extend(page.into_iter().map(|(_, label)| label));
+    // The skins' places are text, not buttons (notes.rs draws them so).
+    buttons.extend(page.into_iter().map(|(button, label)| match button {
+        m::Button::Place(_) => format!("\u{1}{label}"),
+        _ => label,
+    }));
 }
 
 /// A click on Mogged's settings page.
